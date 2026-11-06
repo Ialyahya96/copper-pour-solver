@@ -2,7 +2,6 @@ import type {
   AnyCircuitElement,
   PCBKeepout,
   PcbBoard,
-  PcbHole,
   PcbPlatedHole,
   PcbSmtPad,
   PcbTrace,
@@ -171,7 +170,23 @@ export const convertCircuitJsonToInputProblem = (
         connectivityKey = `unconnected-plated-hole:${platedHole.pcb_plated_hole_id}`
       }
 
-      if (platedHole.shape === "circle") {
+      if (platedHole.shape === "hole_with_polygon_pad") {
+        const ccwRotationRadians =
+          ((platedHole.ccw_rotation ?? 0) * Math.PI) / 180
+        const cosRotation = Math.cos(ccwRotationRadians)
+        const sinRotation = Math.sin(ccwRotationRadians)
+        pads.push({
+          shape: "polygon",
+          padId: platedHole.pcb_plated_hole_id,
+          layer: options.layer,
+          connectivityKey,
+          isPlatedHole: true,
+          points: platedHole.pad_outline.map((vertex) => ({
+            x: platedHole.x + vertex.x * cosRotation - vertex.y * sinRotation,
+            y: platedHole.y + vertex.x * sinRotation + vertex.y * cosRotation,
+          })),
+        })
+      } else if (platedHole.shape === "circle") {
         pads.push({
           shape: "circle",
           padId: platedHole.pcb_plated_hole_id,
@@ -253,7 +268,53 @@ export const convertCircuitJsonToInputProblem = (
         }
       }
     } else if (elm.type === "pcb_hole") {
-      const hole = elm as PcbHole
+      const hole = elm
+      if (hole.hole_shape === "rect") {
+        pads.push({
+          shape: "rect",
+          padId: hole.pcb_hole_id,
+          layer: options.layer,
+          connectivityKey: `hole:${hole.pcb_hole_id}`,
+          bounds: {
+            minX: hole.x - hole.hole_width / 2,
+            minY: hole.y - hole.hole_height / 2,
+            maxX: hole.x + hole.hole_width / 2,
+            maxY: hole.y + hole.hole_height / 2,
+          },
+        })
+        continue
+      }
+      if (hole.hole_shape === "pill" || hole.hole_shape === "rotated_pill") {
+        let ccwRotation = 0
+        if (hole.hole_shape === "rotated_pill") ccwRotation = hole.ccw_rotation
+        pads.push({
+          shape: "pill",
+          padId: hole.pcb_hole_id,
+          layer: options.layer,
+          connectivityKey: `hole:${hole.pcb_hole_id}`,
+          x: hole.x,
+          y: hole.y,
+          width: hole.hole_width,
+          height: hole.hole_height,
+          radius: Math.min(hole.hole_width, hole.hole_height) / 2,
+          ccwRotation,
+        })
+        continue
+      }
+      if (hole.hole_shape === "oval") {
+        pads.push({
+          shape: "oval",
+          padId: hole.pcb_hole_id,
+          layer: options.layer,
+          connectivityKey: `hole:${hole.pcb_hole_id}`,
+          x: hole.x,
+          y: hole.y,
+          width: hole.hole_width,
+          height: hole.hole_height,
+          ccwRotation: 0,
+        })
+        continue
+      }
       if (hole.hole_shape !== "circle") continue
 
       pads.push({
@@ -266,8 +327,22 @@ export const convertCircuitJsonToInputProblem = (
         radius: hole.hole_diameter / 2,
       } as InputCircularPad)
     } else if (elm.type === "pcb_cutout") {
-      const cutout = elm as any
+      const cutout = elm
       if (cutout.shape === "rect") {
+        if (cutout.rotation) {
+          pads.push({
+            shape: "rotated_rect",
+            padId: cutout.pcb_cutout_id,
+            layer: options.layer,
+            connectivityKey: `cutout:${cutout.pcb_cutout_id}`,
+            x: cutout.center.x,
+            y: cutout.center.y,
+            width: cutout.width,
+            height: cutout.height,
+            ccwRotation: cutout.rotation,
+          })
+          continue
+        }
         pads.push({
           shape: "rect",
           padId: cutout.pcb_cutout_id,
@@ -346,10 +421,9 @@ export const convertCircuitJsonToInputProblem = (
       } as InputCircularPad)
     } else if (elm.type === "pcb_trace") {
       const trace = elm as PcbTrace
-      const connectivityKey = getSubcircuitConnectivityKeyForId(
-        trace.pcb_trace_id,
-      )
-      if (!connectivityKey) continue
+      const connectivityKey =
+        getSubcircuitConnectivityKeyForId(trace.pcb_trace_id) ??
+        `unconnected-trace:${trace.pcb_trace_id}`
 
       let currentSegmentGroup: Point[] = []
       let currentWidth: number | null = null
@@ -369,8 +443,45 @@ export const convertCircuitJsonToInputProblem = (
         currentWidth = null
       }
 
-      for (const r of trace.route) {
-        const ri = r as any
+      for (const [index, ri] of trace.route.entries()) {
+        const next = trace.route[index + 1]
+        if (
+          ri.route_type === "wire" &&
+          ri.layer === options.layer &&
+          ri.width_interpolation_mode &&
+          ri.start_width !== undefined &&
+          ri.end_width !== undefined &&
+          next
+        ) {
+          const end = next.route_type === "through_pad" ? next.start : next
+          const endLayer =
+            next.route_type === "via"
+              ? next.from_layer
+              : next.route_type === "through_pad"
+                ? next.start_layer
+                : next.layer
+          if (
+            endLayer === ri.layer &&
+            Math.hypot(end.x - ri.x, end.y - ri.y) > 0
+          ) {
+            // End the preceding constant-width run at this point, then emit
+            // the taper independently. Its endpoint begins the next run.
+            currentSegmentGroup.push({ x: ri.x, y: ri.y })
+            commitGroup()
+            pads.push({
+              shape: "tapered_trace",
+              padId: `${trace.pcb_trace_id}-${pads.length}`,
+              layer: options.layer,
+              connectivityKey,
+              start: { x: ri.x, y: ri.y },
+              end: { x: end.x, y: end.y },
+              start_width: ri.start_width,
+              end_width: ri.end_width,
+              width_interpolation_mode: ri.width_interpolation_mode,
+            })
+            continue
+          }
+        }
         const isWireOnLayer =
           ri.route_type === "wire" && ri.layer === options.layer
         if (isWireOnLayer) {
@@ -393,7 +504,16 @@ export const convertCircuitJsonToInputProblem = (
     }
   }
 
-  const { width, height } = pcb_board
+  const { width, height, center } = pcb_board
+  const boardBounds =
+    width !== undefined && height !== undefined
+      ? {
+          minX: center.x - width / 2,
+          minY: center.y - height / 2,
+          maxX: center.x + width / 2,
+          maxY: center.y + height / 2,
+        }
+      : undefined
 
   // Use pour-specific outline if provided, otherwise fall back to board outline
   const outline = options.outline ?? pcb_board.outline
@@ -408,13 +528,28 @@ export const convertCircuitJsonToInputProblem = (
       maxX: Math.max(...xs),
       maxY: Math.max(...ys),
     }
+  } else if (boardBounds) {
+    bounds = boardBounds
   } else {
-    bounds = {
-      minX: -width! / 2,
-      minY: -height! / 2,
-      maxX: width! / 2,
-      maxY: height! / 2,
+    throw new Error(
+      "pcb_board requires width and height when no outline is provided",
+    )
+  }
+
+  let boardOutline = options.board_edge_outline
+  if (!boardOutline?.length) boardOutline = pcb_board.outline
+  if (!boardOutline?.length) {
+    if (!boardBounds) {
+      throw new Error(
+        "pcb_board requires width and height when no outline is provided",
+      )
     }
+    boardOutline = [
+      { x: boardBounds.minX, y: boardBounds.minY },
+      { x: boardBounds.maxX, y: boardBounds.minY },
+      { x: boardBounds.maxX, y: boardBounds.maxY },
+      { x: boardBounds.minX, y: boardBounds.maxY },
+    ]
   }
 
   const regionsForPour = [
@@ -423,8 +558,12 @@ export const convertCircuitJsonToInputProblem = (
       layer: options.layer,
       bounds,
       boardEdgeOutline: options.board_edge_outline,
+      boardOutline,
       outline,
       connectivityKey: pourConnectivityKey,
+      crosshatch: options.crosshatch,
+      crosshatchPitch: options.crosshatchPitch,
+      crosshatchWidth: options.crosshatchWidth,
       padMargin: options.pad_margin,
       traceMargin: options.trace_margin,
       pourMargin:

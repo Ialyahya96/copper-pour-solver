@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import type { BRepShape } from "circuit-json"
-import { CopperPourPipelineSolver } from "lib/index"
+import {
+  CopperPourPipelineSolver,
+  convertCircuitJsonToInputProblem,
+} from "lib/index"
 import type { InputPourRegion, InputProblem } from "lib/types"
 
 type Point = { x: number; y: number }
@@ -146,7 +149,6 @@ test("keeps disconnected islands when removeDisconnectedIslands is false", () =>
 })
 
 test("convertCircuitJsonToInputProblem sets removeDisconnectedIslands based on island_removal_mode", async () => {
-  const { convertCircuitJsonToInputProblem } = await import("lib/index")
   const circuitJson: any = [
     {
       type: "pcb_board",
@@ -208,3 +210,52 @@ test("convertCircuitJsonToInputProblem sets removeDisconnectedIslands based on i
   })
   expect(problemFlag.regionsForPour[0]?.removeDisconnectedIslands).toBe(true)
 })
+
+for (const crosshatch of [false, true]) {
+  test(`preserves same-net tapered trace connection with crosshatch=${crosshatch}`, () => {
+    const input: InputProblem = {
+      regionsForPour: [
+        {
+          ...makeRegion({ minX: -5, minY: -3, maxX: 5, maxY: 3 }),
+          crosshatch,
+        },
+      ],
+      pads: [
+        {
+          shape: "tapered_trace",
+          padId: "gnd-taper",
+          layer: "top",
+          connectivityKey: "net:GND",
+          start: { x: -4, y: 0 },
+          end: { x: -2, y: 0 },
+          start_width: 1,
+          end_width: 0.2,
+          width_interpolation_mode: "quadratic",
+        },
+        {
+          shape: "trace",
+          padId: "foreign-trace",
+          layer: "top",
+          connectivityKey: "net:VBAT",
+          width: 0.2,
+          segments: [
+            { x: 0, y: -4 },
+            { x: 0, y: 4 },
+          ],
+        },
+      ],
+    }
+    const [shapes] = new CopperPourPipelineSolver(input).getOutput()
+      .brep_shapes_by_region
+    expect(containsPoint(shapes!, { x: -3, y: 0 })).toBe(true)
+    expect(shapes!.length).toBeGreaterThan(0)
+    expect(
+      shapes!.every((shape) =>
+        shape.outer_ring.vertices.every((vertex) => vertex.x < 0),
+      ),
+    ).toBe(true)
+    if (crosshatch) {
+      expect(shapes!.some((shape) => shape.inner_rings.length > 0)).toBe(true)
+    }
+  })
+}

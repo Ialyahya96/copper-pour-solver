@@ -1,4 +1,5 @@
 import type { InputPad } from "../../types"
+import { taperedTraceToPolygon } from "./tapered-trace-to-polygon"
 import {
   boxToPolygon,
   circleToPolygon,
@@ -73,6 +74,12 @@ export const inputPadToPolygons = (
     if (uniquePoints.length < 3) return []
 
     const polygon = normalizeRing(uniquePoints, "inputPadToPolygons.polygon")
+    if (polygon.length < 3) return []
+    return margin > 0 ? offsetPolygon(polygon, margin) : [polygon]
+  }
+
+  if (pad.shape === "tapered_trace") {
+    const polygon = taperedTraceToPolygon(pad)
     if (polygon.length < 3) return []
     return margin > 0 ? offsetPolygon(polygon, margin) : [polygon]
   }

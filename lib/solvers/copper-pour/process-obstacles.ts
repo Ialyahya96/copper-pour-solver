@@ -11,11 +11,14 @@ import { normalizeRing, type PolygonRing } from "./polygon-ring"
 
 interface ProcessedObstacles {
   polygonsToSubtract: PolygonRing[]
+  /** Pad/trace/hole/keepout/thermal clearances, excluding board-edge margins. */
+  obstaclePolygons: PolygonRing[]
 }
 
 export const processObstaclesForPour = (
   pads: InputPad[],
-  pourConnectivityKey: string,
+  // undefined includes every pad, used to protect same-net copper from hatch openings.
+  pourConnectivityKey: string | undefined,
   margins: {
     padMargin: number
     traceMargin: number
@@ -90,6 +93,7 @@ export const processObstaclesForPour = (
     }
   }
 
+  const boardEdgePolygonCount = polygonsToSubtract.length
   for (const pad of pads) {
     const isOnNet = pad.connectivityKey === pourConnectivityKey
 
@@ -114,11 +118,17 @@ export const processObstaclesForPour = (
     const getMargin = (defaultMargin: number) =>
       isKeepout ? 0 : isHoleOrCutout ? (cutoutMargin ?? 0) : defaultMargin
 
-    const defaultMargin = pad.shape === "trace" ? traceMargin : padMargin
+    const defaultMargin =
+      pad.shape === "trace" || pad.shape === "tapered_trace"
+        ? traceMargin
+        : padMargin
     polygonsToSubtract.push(
       ...inputPadToPolygons(pad, getMargin(defaultMargin)),
     )
   }
 
-  return { polygonsToSubtract }
+  return {
+    polygonsToSubtract,
+    obstaclePolygons: polygonsToSubtract.slice(boardEdgePolygonCount),
+  }
 }

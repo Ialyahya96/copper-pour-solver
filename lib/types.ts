@@ -10,8 +10,19 @@ export interface InputPourRegion {
    * apply board-edge clearance independently from a custom clipping outline.
    */
   boardEdgeOutline?: Point[]
+  /**
+   * Physical clipping boundary: board-world points in mm, +X right/+Y up,
+   * right-handed with +Z above. Does not replace the region margin outline.
+   */
+  boardOutline?: Point[]
   outline?: Point[]
   connectivityKey: string
+  /** Use a 45-degree mesh; defaults to 0.25mm copper width and 1mm pitch. */
+  crosshatch?: boolean
+  /** Repeat spacing perpendicular to the strips, in mm. Defaults to 1. */
+  crosshatchPitch?: number
+  /** Copper strip and rim width in mm. Defaults to 0.25; must be less than pitch. */
+  crosshatchWidth?: number
   padMargin: number
   traceMargin: number
   /** Clearance from higher-priority, different-net pour regions. */
@@ -87,6 +98,18 @@ export interface InputTracePad extends BaseInputPad {
   segments: Point[]
 }
 
+/** A single tapered wire segment in board-world mm (+X right, +Y up).
+ * Endpoints are positions; widths are perpendicular to the centerline.
+ */
+export interface InputTaperedTracePad extends BaseInputPad {
+  shape: "tapered_trace"
+  start: Point
+  end: Point
+  start_width: number
+  end_width: number
+  width_interpolation_mode: "linear" | "quadratic"
+}
+
 export interface InputPolygonPad extends BaseInputPad {
   shape: "polygon"
   points: Point[]
@@ -99,6 +122,7 @@ export type InputPad =
   | InputPillPad
   | InputOvalPad
   | InputTracePad
+  | InputTaperedTracePad
   | InputPolygonPad
 
 export interface InputProblem {
