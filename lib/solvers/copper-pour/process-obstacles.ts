@@ -1,5 +1,6 @@
 import type { Point } from "@tscircuit/math-utils"
 import type { InputPad } from "../../types"
+import { bridgePillPadClearances } from "./bridge-pill-pad-clearances"
 import { generateThermalReliefClearances } from "./generate-thermal-relief-clearances"
 import { inputPadToPolygons } from "./input-pad-to-polygons"
 import {
@@ -124,6 +125,16 @@ export const processObstaclesForPour = (
         : padMargin
     polygonsToSubtract.push(
       ...inputPadToPolygons(pad, getMargin(defaultMargin)),
+    )
+  }
+
+  if (pourConnectivityKey !== undefined && padMargin > 0) {
+    polygonsToSubtract.push(
+      ...bridgePillPadClearances(
+        pads.filter((pad) => pad.shape === "pill"),
+        pourConnectivityKey,
+        padMargin,
+      ),
     )
   }
 
